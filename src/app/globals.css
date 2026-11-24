@@ -175,26 +175,63 @@ body {
   border: 1px solid rgba(255, 191, 0, 0.45);
 }
 
-/* === IPHONE & MOBILE SAFARI VIEWPORT GUARDRAILS === */
+/* === IPHONE & MOBILE SAFARI VIEWPORT & SWIPE GUARDRAILS === */
 @media (max-width: 767px) {
-  /* Prevent iOS Safari auto-zoom when tapping form controls inside popups */
+  /* Prevent iOS Safari auto-zoom when tapping form controls */
   input,
   select,
   textarea {
     font-size: 16px !important;
   }
 
-  /* Constrain modal popups within dynamic viewport height (dvh) above iOS toolbar/keyboard */
+  /* Enable smooth vertical touch-swipe inside all popups/modals */
   [role="dialog"],
   .modal-sheet {
-    width: calc(100vw - 1.5rem) !important;
-    max-width: calc(100vw - 1.5rem) !important;
-    max-height: 86dvh !important;
+    width: calc(100vw - 1.25rem) !important;
+    max-width: calc(100vw - 1.25rem) !important;
+    max-height: 82dvh !important;
     overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch !important;
+    overscroll-behavior: contain !important;
+    touch-action: pan-y !important;
+    padding-bottom: 1.75rem !important;
     margin-left: auto;
     margin-right: auto;
+  }
+
+  /* Enable smooth vertical touch-swipe inside the mobile side panel */
+  [data-slot="sheet-content"] {
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    overscroll-behavior: contain !important;
+    touch-action: pan-y !important;
+  }
+
+  /* Enable smooth horizontal touch-swipe across wide tables */
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+    overscroll-behavior-x: contain;
+  }
+
+  /* Turn multi-row status filter pills into a single horizontal swipe bar */
+  .glass-card .flex.flex-wrap.items-center.gap-1\.5 {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .glass-card .flex.flex-wrap.items-center.gap-1\.5::-webkit-scrollbar {
+    display: none;
+  }
+
+  .glass-card .flex.flex-wrap.items-center.gap-1\.5 > button {
+    flex-shrink: 0;
   }
 }
 

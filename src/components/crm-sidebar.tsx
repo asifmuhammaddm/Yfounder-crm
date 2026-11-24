@@ -65,7 +65,7 @@ export function CrmSidebar({ userEmail }: CrmSidebarProps) {
   }
 
   const navContent = (
-    <div className="flex h-full flex-col justify-between p-4">
+    <div className="flex min-h-full flex-col justify-between gap-6 p-4 pb-10">
       <div className="space-y-6">
         <div className="px-2 pt-1">
           <BrandLogo />
@@ -168,7 +168,10 @@ export function CrmSidebar({ userEmail }: CrmSidebarProps) {
           >
             <Menu className="h-5 w-5" />
           </SheetTrigger>
-          <SheetContent className="w-72 bg-[#f8f9fa] p-0" side="left">
+          <SheetContent
+            className="h-dvh max-h-dvh w-72 overflow-y-auto overscroll-contain bg-[#f8f9fa] p-0"
+            side="left"
+          >
             <SheetTitle className="sr-only">Navigation Menu</SheetTitle>
             {navContent}
           </SheetContent>
