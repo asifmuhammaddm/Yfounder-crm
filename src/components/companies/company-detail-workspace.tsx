@@ -22,8 +22,10 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import {
+  CURRENCY_OPTIONS,
   formatCurrencyAmount,
-  useWorkspaceCurrency,
+  normalizeCurrency,
+  type CurrencyCode,
 } from "@/lib/currency";
 import type {
   ClientCategory,
@@ -72,6 +74,30 @@ function getCompanyStatusBadgeClass(status: string) {
   }
 }
 
+function formatGroupedInvoiceSummary(
+  invoices: InvoiceRecord[],
+  fallbackCurrency: CurrencyCode,
+  selector: (inv: InvoiceRecord) => number
+): string {
+  const valid = invoices.filter((i) => i.status !== "Void");
+  if (valid.length === 0) {
+    return formatCurrencyAmount(0, fallbackCurrency);
+  }
+
+  const totalsByCurrency = new Map<CurrencyCode, number>();
+  for (const inv of valid) {
+    const curr = normalizeCurrency(inv.currency);
+    totalsByCurrency.set(
+      curr,
+      (totalsByCurrency.get(curr) ?? 0) + selector(inv)
+    );
+  }
+
+  return Array.from(totalsByCurrency.entries())
+    .map(([curr, amt]) => formatCurrencyAmount(amt, curr))
+    .join(" + ");
+}
+
 interface CompanyDetailWorkspaceProps {
   initialCompany: CompanyRecord;
   initialContacts: ContactRecord[];
@@ -90,16 +116,20 @@ export function CompanyDetailWorkspace({
   initialInvoices = [],
 }: CompanyDetailWorkspaceProps) {
   const router = useRouter();
-  const [currency] = useWorkspaceCurrency("AED");
   const [company, setCompany] = useState<CompanyRecord>(initialCompany);
   const [contacts, setContacts] = useState<ContactRecord[]>(initialContacts);
   const [isDeletingCompany, setIsDeletingCompany] = useState(false);
+
+  const clientDefaultCurrency = normalizeCurrency(company.default_currency);
 
   // Edit Company Modal
   const [editCompanyOpen, setEditCompanyOpen] = useState(false);
   const [compName, setCompName] = useState(company.name);
   const [compCategory, setCompCategory] = useState(company.client_category);
   const [compStatus, setCompStatus] = useState(company.status);
+  const [compDefaultCurrency, setCompDefaultCurrency] = useState<CurrencyCode>(
+    clientDefaultCurrency
+  );
   const [compIndustry, setCompIndustry] = useState(company.industry ?? "");
   const [compWebsite, setCompWebsite] = useState(company.website ?? "");
   const [compCity, setCompCity] = useState(company.city ?? "");
@@ -136,6 +166,7 @@ export function CompanyDetailWorkspace({
         normalized_name: normalizeCompanyName(compName),
         client_category: compCategory,
         status: compStatus,
+        default_currency: compDefaultCurrency,
         industry: compIndustry.trim() || null,
         website: compWebsite.trim() || null,
         city: compCity.trim() || null,
@@ -380,12 +411,21 @@ export function CompanyDetailWorkspace({
     router.refresh();
   }
 
-  const totalBilled = initialInvoices
-    .filter((i) => i.status !== "Void")
-    .reduce((s, i) => s + Number(i.total_amount || 0), 0);
-  const totalPaid = initialInvoices
-    .filter((i) => i.status !== "Void")
-    .reduce((s, i) => s + Number(i.amount_paid || 0), 0);
+  const billedSummary = formatGroupedInvoiceSummary(
+    initialInvoices,
+    clientDefaultCurrency,
+    (i) => Number(i.total_amount || 0)
+  );
+  const paidSummary = formatGroupedInvoiceSummary(
+    initialInvoices,
+    clientDefaultCurrency,
+    (i) => Number(i.amount_paid || 0)
+  );
+  const dueSummary = formatGroupedInvoiceSummary(
+    initialInvoices,
+    clientDefaultCurrency,
+    (i) => Math.max(0, Number(i.total_amount || 0) - Number(i.amount_paid || 0))
+  );
 
   return (
     <div className="space-y-6">
@@ -400,19 +440,22 @@ export function CompanyDetailWorkspace({
       </div>
 
       {/* Company Hero Card */}
-      <div className="glass-card rounded-2xl p-6">
+      <div className="glass-card rounded-2xl p-4 sm:p-6">
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
-          <div className="flex items-start gap-4">
+          <div className="flex min-w-0 items-start gap-3.5 sm:gap-4">
             <div className="brand-gradient flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-white shadow-sm">
               <Building2 className="h-6 w-6 text-[#ffbf00]" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-bold text-[#084154]">
+                <h1 className="break-words text-xl sm:text-2xl font-bold text-[#084154]">
                   {company.name}
                 </h1>
                 <span className="rounded-md bg-[#084154]/10 px-2.5 py-0.5 text-xs font-semibold text-[#084154]">
                   {company.client_category}
+                </span>
+                <span className="rounded-md bg-[#4b8f9a]/15 px-2.5 py-0.5 text-xs font-bold text-[#084154]">
+                  Billing: {clientDefaultCurrency}
                 </span>
                 <span
                   className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${getCompanyStatusBadgeClass(
@@ -423,7 +466,7 @@ export function CompanyDetailWorkspace({
                 </span>
               </div>
 
-              <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">
+              <div className="mt-2 flex flex-wrap items-center gap-3 sm:gap-4 text-xs text-slate-500">
                 {company.industry && (
                   <span className="font-medium text-[#4b8f9a]">
                     {company.industry}
@@ -431,7 +474,7 @@ export function CompanyDetailWorkspace({
                 )}
                 {(company.city || company.country) && (
                   <span className="inline-flex items-center gap-1">
-                    <MapPin className="h-3.5 w-3.5" />
+                    <MapPin className="h-3.5 w-3.5 shrink-0" />
                     {[company.city, company.country].filter(Boolean).join(", ")}
                   </span>
                 )}
@@ -444,9 +487,9 @@ export function CompanyDetailWorkspace({
                     }
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-[#084154] underline-offset-2 hover:underline"
+                    className="inline-flex items-center gap-1 break-all text-[#084154] underline-offset-2 hover:underline"
                   >
-                    <Globe className="h-3.5 w-3.5" />
+                    <Globe className="h-3.5 w-3.5 shrink-0" />
                     {company.website}
                   </a>
                 )}
@@ -459,7 +502,7 @@ export function CompanyDetailWorkspace({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <Button
               type="button"
               variant="outline"
@@ -494,7 +537,7 @@ export function CompanyDetailWorkspace({
       </div>
 
       {/* Multi-Contact Stakeholder Directory */}
-      <div className="glass-card rounded-2xl p-6">
+      <div className="glass-card rounded-2xl p-4 sm:p-6">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div>
             <h2 className="text-lg font-bold text-[#084154]">
@@ -529,15 +572,15 @@ export function CompanyDetailWorkspace({
             {contacts.map((contact) => (
               <div
                 key={contact.id}
-                className={`rounded-2xl border p-4 transition-all ${
+                className={`min-w-0 rounded-2xl border p-4 transition-all ${
                   contact.is_primary
                     ? "border-[#4b8f9a] bg-[#084154]/[0.03]"
                     : "border-slate-200/80 bg-white/80"
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-bold text-[#084154]">
                         {contact.full_name}
                       </h3>
@@ -555,7 +598,7 @@ export function CompanyDetailWorkspace({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 shrink-0">
                     {!contact.is_primary && (
                       <Button
                         type="button"
@@ -592,11 +635,11 @@ export function CompanyDetailWorkspace({
 
                 <div className="mt-3 space-y-1.5 text-xs text-slate-600">
                   {contact.email && (
-                    <p className="flex items-center gap-2">
-                      <Mail className="h-3.5 w-3.5 text-slate-400" />
+                    <p className="flex min-w-0 items-center gap-2">
+                      <Mail className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                       <a
                         href={`mailto:${contact.email}`}
-                        className="hover:text-[#084154] hover:underline"
+                        className="truncate hover:text-[#084154] hover:underline"
                       >
                         {contact.email}
                       </a>
@@ -604,7 +647,7 @@ export function CompanyDetailWorkspace({
                   )}
                   {contact.phone && (
                     <p className="flex items-center gap-2">
-                      <Phone className="h-3.5 w-3.5 text-slate-400" />
+                      <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                       <span>{contact.phone}</span>
                     </p>
                   )}
@@ -616,10 +659,10 @@ export function CompanyDetailWorkspace({
       </div>
 
       {/* Client Engagements & Proposals Strip */}
-      <div className="glass-card rounded-2xl p-6">
+      <div className="glass-card rounded-2xl p-4 sm:p-6">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div className="flex items-center gap-2.5">
-            <Briefcase className="h-5 w-5 text-[#4b8f9a]" />
+            <Briefcase className="h-5 w-5 shrink-0 text-[#4b8f9a]" />
             <div>
               <h2 className="text-lg font-bold text-[#084154]">
                 Engagements & Proposals ({initialEngagements.length})
@@ -632,7 +675,7 @@ export function CompanyDetailWorkspace({
 
           <Link
             href={`/engagements?companyId=${company.id}`}
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#084154] px-3.5 text-xs font-semibold text-white hover:bg-[#4b8f9a]"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-[#084154] px-3.5 text-xs font-semibold text-white hover:bg-[#4b8f9a]"
           >
             Manage in Engagements
             <ArrowUpRight className="h-3.5 w-3.5 text-[#ffbf00]" />
@@ -645,38 +688,43 @@ export function CompanyDetailWorkspace({
           </p>
         ) : (
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {initialEngagements.map((eng) => (
-              <div
-                key={eng.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white/80 p-3.5"
-              >
-                <div>
-                  <p className="text-sm font-bold text-[#084154]">{eng.title}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Stage: <span className="font-semibold">{eng.status}</span> ·
-                    Value:{" "}
-                    <span className="font-semibold text-[#084154]">
-                      {formatCurrencyAmount(eng.total_value, currency)}
-                    </span>
-                  </p>
-                </div>
-                <Link
-                  href={`/engagements?companyId=${company.id}`}
-                  className="text-xs font-semibold text-[#4b8f9a] hover:text-[#084154]"
+            {initialEngagements.map((eng) => {
+              const engCurr = normalizeCurrency(eng.currency);
+              return (
+                <div
+                  key={eng.id}
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white/80 p-3.5"
                 >
-                  Open →
-                </Link>
-              </div>
-            ))}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-[#084154]">
+                      {eng.title}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Stage: <span className="font-semibold">{eng.status}</span> ·
+                      Value:{" "}
+                      <span className="font-semibold text-[#084154]">
+                        {formatCurrencyAmount(eng.total_value, engCurr)}
+                      </span>
+                    </p>
+                  </div>
+                  <Link
+                    href={`/engagements?companyId=${company.id}`}
+                    className="shrink-0 text-xs font-semibold text-[#4b8f9a] hover:text-[#084154]"
+                  >
+                    Open →
+                  </Link>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
       {/* Active Delivery Projects Strip */}
-      <div className="glass-card rounded-2xl p-6">
+      <div className="glass-card rounded-2xl p-4 sm:p-6">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div className="flex items-center gap-2.5">
-            <FolderKanban className="h-5 w-5 text-[#4b8f9a]" />
+            <FolderKanban className="h-5 w-5 shrink-0 text-[#4b8f9a]" />
             <div>
               <h2 className="text-lg font-bold text-[#084154]">
                 Delivery Projects ({initialProjects.length})
@@ -689,7 +737,7 @@ export function CompanyDetailWorkspace({
 
           <Link
             href="/projects"
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-[#084154] hover:border-[#084154]"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-[#084154] hover:border-[#084154]"
           >
             Open Projects
             <ArrowUpRight className="h-3.5 w-3.5" />
@@ -705,10 +753,10 @@ export function CompanyDetailWorkspace({
             {initialProjects.map((proj) => (
               <div
                 key={proj.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white/80 p-3.5"
+                className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white/80 p-3.5"
               >
-                <div>
-                  <p className="text-sm font-bold text-[#084154]">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-[#084154]">
                     {proj.title}
                   </p>
                   <p className="mt-0.5 text-xs text-slate-500">
@@ -718,7 +766,7 @@ export function CompanyDetailWorkspace({
                 </div>
                 <Link
                   href="/projects"
-                  className="text-xs font-semibold text-[#4b8f9a] hover:text-[#084154]"
+                  className="shrink-0 text-xs font-semibold text-[#4b8f9a] hover:text-[#084154]"
                 >
                   Open →
                 </Link>
@@ -729,28 +777,24 @@ export function CompanyDetailWorkspace({
       </div>
 
       {/* Invoices & Receivables Strip */}
-      <div className="glass-card rounded-2xl p-6">
+      <div className="glass-card rounded-2xl p-4 sm:p-6">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-          <div className="flex items-center gap-2.5">
-            <Receipt className="h-5 w-5 text-[#4b8f9a]" />
-            <div>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Receipt className="h-5 w-5 shrink-0 text-[#4b8f9a]" />
+            <div className="min-w-0">
               <h2 className="text-lg font-bold text-[#084154]">
                 Invoices & Receivables ({initialInvoices.length})
               </h2>
-              <p className="text-xs text-slate-500">
-                Billed: {formatCurrencyAmount(totalBilled, currency)} ·
-                Collected: {formatCurrencyAmount(totalPaid, currency)} · Due:{" "}
-                {formatCurrencyAmount(
-                  Math.max(0, totalBilled - totalPaid),
-                  currency
-                )}
+              <p className="break-words text-xs text-slate-500">
+                Billed: {billedSummary} · Collected: {paidSummary} · Due:{" "}
+                {dueSummary}
               </p>
             </div>
           </div>
 
           <Link
             href={`/invoices?companyId=${company.id}`}
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#084154] px-3.5 text-xs font-semibold text-white hover:bg-[#4b8f9a]"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-[#084154] px-3.5 text-xs font-semibold text-white hover:bg-[#4b8f9a]"
           >
             Manage Invoices
             <ArrowUpRight className="h-3.5 w-3.5 text-[#ffbf00]" />
@@ -763,49 +807,52 @@ export function CompanyDetailWorkspace({
           </p>
         ) : (
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {initialInvoices.map((inv) => (
-              <div
-                key={inv.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white/80 p-3.5"
-              >
-                <div>
-                  <p className="text-sm font-bold text-[#084154]">
-                    {inv.invoice_number}
-                  </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Status: <span className="font-semibold">{inv.status}</span> ·
-                    Total:{" "}
-                    <span className="font-semibold text-[#084154]">
-                      {formatCurrencyAmount(inv.total_amount, currency)}
-                    </span>
-                  </p>
-                </div>
-                <Link
-                  href={`/invoices?companyId=${company.id}`}
-                  className="text-xs font-semibold text-[#4b8f9a] hover:text-[#084154]"
+            {initialInvoices.map((inv) => {
+              const invCurr = normalizeCurrency(inv.currency);
+              return (
+                <div
+                  key={inv.id}
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white/80 p-3.5"
                 >
-                  Open →
-                </Link>
-              </div>
-            ))}
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-[#084154]">
+                      {inv.invoice_number}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Status: <span className="font-semibold">{inv.status}</span>{" "}
+                      · Total:{" "}
+                      <span className="font-semibold text-[#084154]">
+                        {formatCurrencyAmount(inv.total_amount, invCurr)}
+                      </span>
+                    </p>
+                  </div>
+                  <Link
+                    href={`/invoices?companyId=${company.id}`}
+                    className="shrink-0 text-xs font-semibold text-[#4b8f9a] hover:text-[#084154]"
+                  >
+                    Open →
+                  </Link>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* Edit Company Modal */}
+      {/* Edit Company Modal (Mobile Safari Safe) */}
       <Dialog open={editCompanyOpen} onOpenChange={setEditCompanyOpen}>
-        <DialogContent className="sm:max-w-2xl bg-white">
+        <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[86dvh] sm:max-w-2xl overflow-y-auto bg-white p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="text-[#084154]">
               Edit Client Profile
             </DialogTitle>
             <DialogDescription>
-              Update organization details, location, or account status.
+              Update organization details, default billing currency, or account status.
             </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={handleUpdateCompany} className="space-y-4 pt-2">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="edit-comp-name">Company Name *</Label>
                 <Input
@@ -822,7 +869,7 @@ export function CompanyDetailWorkspace({
                   id="edit-comp-cat"
                   value={compCategory}
                   onChange={(e) => setCompCategory(e.target.value)}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {CLIENT_CATEGORIES.map((cat) => (
                     <option key={cat} value={cat}>
@@ -833,23 +880,14 @@ export function CompanyDetailWorkspace({
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-comp-industry">Industry</Label>
-                <Input
-                  id="edit-comp-industry"
-                  value={compIndustry}
-                  onChange={(e) => setCompIndustry(e.target.value)}
-                />
-              </div>
-
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="edit-comp-status">Status</Label>
                 <select
                   id="edit-comp-status"
                   value={compStatus}
                   onChange={(e) => setCompStatus(e.target.value)}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {COMPANY_STATUSES.map((st) => (
                     <option key={st} value={st}>
@@ -858,9 +896,38 @@ export function CompanyDetailWorkspace({
                   ))}
                 </select>
               </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-comp-currency">
+                  Default Billing Currency *
+                </Label>
+                <select
+                  id="edit-comp-currency"
+                  value={compDefaultCurrency}
+                  onChange={(e) =>
+                    setCompDefaultCurrency(e.target.value as CurrencyCode)
+                  }
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-[#084154]"
+                >
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.flag} {c.code} — {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-comp-industry">Industry</Label>
+                <Input
+                  id="edit-comp-industry"
+                  value={compIndustry}
+                  onChange={(e) => setCompIndustry(e.target.value)}
+                />
+              </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="edit-comp-city">City</Label>
                 <Input
@@ -899,18 +966,19 @@ export function CompanyDetailWorkspace({
               />
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setEditCompanyOpen(false)}
+                className="w-full sm:w-auto"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSavingCompany}
-                className="brand-gradient font-semibold text-white"
+                className="brand-gradient w-full sm:w-auto font-semibold text-white"
               >
                 {isSavingCompany ? "Saving..." : "Save Changes"}
               </Button>
@@ -919,9 +987,9 @@ export function CompanyDetailWorkspace({
         </DialogContent>
       </Dialog>
 
-      {/* Add / Edit Contact Modal */}
+      {/* Add / Edit Contact Modal (Mobile Safari Safe) */}
       <Dialog open={contactModalOpen} onOpenChange={setContactModalOpen}>
-        <DialogContent className="sm:max-w-2xl bg-white">
+        <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[86dvh] sm:max-w-2xl overflow-y-auto bg-white p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="text-[#084154]">
               {editingContact ? "Edit Stakeholder" : "Add Stakeholder Contact"}
@@ -932,7 +1000,7 @@ export function CompanyDetailWorkspace({
           </DialogHeader>
 
           <form onSubmit={handleSaveContact} className="space-y-4 pt-2">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="stk-name">Full Name *</Label>
                 <Input
@@ -955,7 +1023,7 @@ export function CompanyDetailWorkspace({
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="stk-email">Email</Label>
                 <Input
@@ -988,18 +1056,19 @@ export function CompanyDetailWorkspace({
               Set as Primary Point of Contact
             </label>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setContactModalOpen(false)}
+                className="w-full sm:w-auto"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSavingContact}
-                className="brand-gradient font-semibold text-white"
+                className="brand-gradient w-full sm:w-auto font-semibold text-white"
               >
                 {isSavingContact
                   ? "Saving..."

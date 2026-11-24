@@ -1,3 +1,7 @@
+import type { CurrencyCode } from "@/lib/currency";
+
+export type { CurrencyCode };
+
 export type ClientCategory = "Startup" | "SMB" | "Enterprise";
 
 export type LeadStatus =
@@ -51,6 +55,25 @@ export type InvoiceStatus =
   | "Overdue"
   | "Void";
 
+export interface OrganizationSettings {
+  id: number;
+  company_name: string;
+  tagline: string | null;
+  website: string | null;
+  billing_email: string | null;
+  billing_phone: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  tax_id_label: string | null;
+  tax_id_value: string | null;
+  default_reporting_currency: CurrencyCode;
+  fx_rates_to_inr: Record<CurrencyCode, number>;
+  inr_payment_details: string | null;
+  international_payment_details: string | null;
+  invoice_footer_note: string | null;
+  updated_at: string;
+}
+
 export interface LeadRecord {
   id: string;
   contact_name: string;
@@ -85,6 +108,7 @@ export interface CompanyRecord {
   normalized_name: string;
   client_category: string;
   status: string;
+  default_currency: CurrencyCode;
   industry: string | null;
   website: string | null;
   city: string | null;
@@ -127,6 +151,7 @@ export interface EngagementRecord {
   title: string;
   requirements_summary: string | null;
   status: string;
+  currency: CurrencyCode;
   total_value: number;
   start_date: string | null;
   renewal_date: string | null;
@@ -151,7 +176,7 @@ export interface EngagementServiceWithService extends EngagementServiceRecord {
 }
 
 export interface EngagementWithDetails extends EngagementRecord {
-  companies: Pick<CompanyRecord, "id" | "name" | "client_category"> | null;
+  companies: Pick<CompanyRecord, "id" | "name" | "client_category" | "default_currency"> | null;
   engagement_services: EngagementServiceWithService[];
 }
 
@@ -231,6 +256,7 @@ export interface InvoiceRecord {
   engagement_id: string | null;
   issue_date: string;
   due_date: string;
+  currency: CurrencyCode;
   total_amount: number;
   amount_paid: number;
   status: string;
@@ -239,7 +265,10 @@ export interface InvoiceRecord {
 }
 
 export interface InvoiceWithDetails extends InvoiceRecord {
-  companies: Pick<CompanyRecord, "id" | "name" | "client_category"> | null;
-  engagements: Pick<EngagementRecord, "id" | "title"> | null;
+  companies: Pick<
+    CompanyRecord,
+    "id" | "name" | "client_category" | "default_currency" | "city" | "country"
+  > | null;
+  engagements: Pick<EngagementRecord, "id" | "title" | "currency"> | null;
   payments: PaymentRecord[];
 }

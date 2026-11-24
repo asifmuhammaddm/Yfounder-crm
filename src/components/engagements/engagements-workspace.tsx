@@ -22,8 +22,13 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { downloadCsvFile } from "@/lib/csv";
 import {
+  CURRENCY_OPTIONS,
+  DEFAULT_FX_RATES_TO_INR,
+  convertCurrencyAmount,
   formatCurrencyAmount,
+  normalizeCurrency,
   useWorkspaceCurrency,
+  type CurrencyCode,
 } from "@/lib/currency";
 import { CurrencySelect } from "@/components/ui/currency-select";
 import type {
@@ -62,6 +67,7 @@ export interface CompanyOption {
   name: string;
   client_category: string;
   status: string;
+  default_currency?: CurrencyCode;
 }
 
 export interface CatalogServiceOption {
@@ -109,6 +115,8 @@ interface EngagementsWorkspaceProps {
   initialProjects: ProjectSummaryRecord[];
   currentUserId: string;
   defaultCompanyId?: string;
+  defaultReportingCurrency?: CurrencyCode;
+  fxRatesToInr?: Record<CurrencyCode, number>;
 }
 
 export function EngagementsWorkspace({
@@ -118,6 +126,8 @@ export function EngagementsWorkspace({
   initialProjects,
   currentUserId,
   defaultCompanyId,
+  defaultReportingCurrency = "INR",
+  fxRatesToInr = DEFAULT_FX_RATES_TO_INR,
 }: EngagementsWorkspaceProps) {
   const router = useRouter();
   const [engagements, setEngagements] =
@@ -125,13 +135,16 @@ export function EngagementsWorkspace({
   const [projects, setProjects] =
     useState<ProjectSummaryRecord[]>(initialProjects);
 
-  // Filters & Shared Multi-Currency
+  // Filters & Executive Reporting Currency (Defaults to INR)
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("All");
   const [companyFilter, setCompanyFilter] = useState<string>(
     defaultCompanyId || "All"
   );
-  const [currency, setCurrency] = useWorkspaceCurrency("AED");
+  const [currencyFilter, setCurrencyFilter] = useState<string>("All");
+  const [reportingCurrency, setReportingCurrency] = useWorkspaceCurrency(
+    defaultReportingCurrency
+  );
 
   // Create / Edit Modal State
   const [modalOpen, setModalOpen] = useState(false);
@@ -140,6 +153,7 @@ export function EngagementsWorkspace({
   const [companyId, setCompanyId] = useState<string>(
     defaultCompanyId || companies[0]?.id || ""
   );
+  const [dealCurrency, setDealCurrency] = useState<CurrencyCode>("INR");
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState<EngagementStatus>("Proposal Sent");
   const [requirementsSummary, setRequirementsSummary] = useState("");
@@ -170,27 +184,55 @@ export function EngagementsWorkspace({
     const wonActive = engagements.filter(
       (e) => e.status === "Won / Active"
     ).length;
+
     const pipelineValue = engagements
       .filter((e) =>
         ["Discovery", "Proposal Sent", "Negotiation"].includes(e.status)
       )
-      .reduce((sum, e) => sum + Number(e.total_value || 0), 0);
+      .reduce(
+        (sum, e) =>
+          sum +
+          convertCurrencyAmount(
+            e.total_value,
+            e.currency,
+            reportingCurrency,
+            fxRatesToInr
+          ),
+        0
+      );
+
     const activeRetainerValue = engagements
       .filter((e) => e.status === "Won / Active")
       .reduce((sum, e) => {
         const lineRetainers = e.engagement_services
           .filter((es) => es.billing_type === "Monthly Retainer")
           .reduce((s, es) => s + Number(es.agreed_price || 0), 0);
-        return sum + lineRetainers;
+        return (
+          sum +
+          convertCurrencyAmount(
+            lineRetainers,
+            e.currency,
+            reportingCurrency,
+            fxRatesToInr
+          )
+        );
       }, 0);
 
     return { total, wonActive, pipelineValue, activeRetainerValue };
-  }, [engagements]);
+  }, [engagements, reportingCurrency, fxRatesToInr]);
 
   const filteredEngagements = useMemo(() => {
     return engagements.filter((eng) => {
       if (statusFilter !== "All" && eng.status !== statusFilter) return false;
       if (companyFilter !== "All" && eng.company_id !== companyFilter) {
+        return false;
+      }
+      const recordCurr = normalizeCurrency(eng.currency);
+      if (currencyFilter === "GCC") {
+        if (!["AED", "SAR", "QAR", "KWD", "BHD", "OMR"].includes(recordCurr)) {
+          return false;
+        }
+      } else if (currencyFilter !== "All" && recordCurr !== currencyFilter) {
         return false;
       }
 
@@ -206,6 +248,7 @@ export function EngagementsWorkspace({
         eng.companies?.name,
         eng.requirements_summary,
         serviceNames,
+        recordCurr,
       ]
         .filter(Boolean)
         .join(" ")
@@ -213,7 +256,7 @@ export function EngagementsWorkspace({
 
       return haystack.includes(q);
     });
-  }, [engagements, statusFilter, companyFilter, searchQuery]);
+  }, [engagements, statusFilter, companyFilter, currencyFilter, searchQuery]);
 
   function handleExportEngagementsCsv() {
     if (filteredEngagements.length === 0) {
@@ -228,8 +271,9 @@ export function EngagementsWorkspace({
         "Client Company",
         "Client Segment",
         "Deal Stage",
-        "Display Currency",
-        "Total Value",
+        "Billed Currency",
+        "Total Value (Billed)",
+        `Converted Value (${reportingCurrency})`,
         "Scoped Services",
         "Start Date",
         "Renewal / Target Date",
@@ -238,26 +282,36 @@ export function EngagementsWorkspace({
         "Requirements Summary",
         "Created Date",
       ],
-      filteredEngagements.map((eng) => [
-        eng.title,
-        eng.companies?.name,
-        eng.companies?.client_category,
-        eng.status,
-        currency,
-        Number(eng.total_value || 0),
-        eng.engagement_services
-          .map(
-            (es) =>
-              `${es.services?.name ?? "Custom"} (${es.billing_type}: ${es.agreed_price})`
-          )
-          .join("; "),
-        eng.start_date,
-        eng.renewal_date,
-        eng.proposal_file_url,
-        eng.contract_file_url,
-        eng.requirements_summary,
-        eng.created_at.slice(0, 10),
-      ])
+      filteredEngagements.map((eng) => {
+        const recordCurr = normalizeCurrency(eng.currency);
+        const convertedVal = convertCurrencyAmount(
+          eng.total_value,
+          recordCurr,
+          reportingCurrency,
+          fxRatesToInr
+        );
+        return [
+          eng.title,
+          eng.companies?.name,
+          eng.companies?.client_category,
+          eng.status,
+          recordCurr,
+          Number(eng.total_value || 0),
+          Number(convertedVal.toFixed(2)),
+          eng.engagement_services
+            .map(
+              (es) =>
+                `${es.services?.name ?? "Custom"} (${es.billing_type}: ${recordCurr} ${es.agreed_price})`
+            )
+            .join("; "),
+          eng.start_date,
+          eng.renewal_date,
+          eng.proposal_file_url,
+          eng.contract_file_url,
+          eng.requirements_summary,
+          eng.created_at.slice(0, 10),
+        ];
+      })
     );
     toast.success(`Exported ${filteredEngagements.length} engagements to CSV`);
   }
@@ -282,10 +336,13 @@ export function EngagementsWorkspace({
       return;
     }
 
+    const initialCompId =
+      companyFilter !== "All" ? companyFilter : companies[0]?.id ?? "";
+    const matchedComp = companies.find((c) => c.id === initialCompId);
+
     setEditingEngagement(null);
-    setCompanyId(
-      companyFilter !== "All" ? companyFilter : companies[0]?.id ?? ""
-    );
+    setCompanyId(initialCompId);
+    setDealCurrency(normalizeCurrency(matchedComp?.default_currency ?? "INR"));
     setTitle("");
     setStatus("Proposal Sent");
     setRequirementsSummary("");
@@ -302,6 +359,7 @@ export function EngagementsWorkspace({
   function openEditModal(eng: EngagementWithDetails) {
     setEditingEngagement(eng);
     setCompanyId(eng.company_id);
+    setDealCurrency(normalizeCurrency(eng.currency));
     setTitle(eng.title);
     setStatus(eng.status as EngagementStatus);
     setRequirementsSummary(eng.requirements_summary ?? "");
@@ -402,6 +460,7 @@ export function EngagementsWorkspace({
       title: title.trim(),
       requirements_summary: requirementsSummary.trim() || null,
       status,
+      currency: dealCurrency,
       total_value: finalTotal,
       start_date: startDate || null,
       renewal_date: renewalDate || null,
@@ -419,7 +478,7 @@ export function EngagementsWorkspace({
           .from("engagements")
           .update(engagementPayload)
           .eq("id", editingEngagement.id)
-          .select("*, companies(id, name, client_category)")
+          .select("*, companies(id, name, client_category, default_currency)")
           .single();
 
         if (error || !data) {
@@ -444,7 +503,7 @@ export function EngagementsWorkspace({
         const { data, error } = await supabase
           .from("engagements")
           .insert(engagementPayload)
-          .select("*, companies(id, name, client_category)")
+          .select("*, companies(id, name, client_category, default_currency)")
           .single();
 
         if (error || !data) {
@@ -634,12 +693,12 @@ export function EngagementsWorkspace({
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight text-[#084154]">
             Engagements & Scope Builder
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Package modular services into client proposals, track deal stages, and kick off delivery projects.
+            Package modular services into client proposals, lock deal currencies, and kick off delivery projects.
           </p>
         </div>
 
@@ -665,8 +724,8 @@ export function EngagementsWorkspace({
         </div>
       </div>
 
-      {/* Summary KPI Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Summary KPI Cards (Converted Accurately to Reporting Currency) */}
+      <div className="grid gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="glass-card rounded-2xl p-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
             Total Engagements
@@ -687,24 +746,27 @@ export function EngagementsWorkspace({
 
         <div className="glass-card rounded-2xl p-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Open Proposal Pipeline
+            Open Pipeline ({reportingCurrency})
           </p>
-          <p className="mt-2 text-2xl font-bold text-[#4b8f9a]">
-            {formatCurrencyAmount(metrics.pipelineValue, currency)}
+          <p className="mt-2 truncate text-2xl font-bold text-[#4b8f9a]">
+            {formatCurrencyAmount(metrics.pipelineValue, reportingCurrency)}
           </p>
         </div>
 
         <div className="glass-card rounded-2xl p-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Active Monthly Retainers
+            Active Retainers ({reportingCurrency})
           </p>
-          <p className="mt-2 text-2xl font-bold text-amber-600">
-            {formatCurrencyAmount(metrics.activeRetainerValue, currency)}
+          <p className="mt-2 truncate text-2xl font-bold text-amber-600">
+            {formatCurrencyAmount(
+              metrics.activeRetainerValue,
+              reportingCurrency
+            )}
           </p>
         </div>
       </div>
 
-      {/* Filters & Currency Bar */}
+      {/* Filters & Executive Reporting Currency Bar */}
       <div className="glass-card space-y-4 rounded-2xl p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="relative flex-1 max-w-md">
@@ -722,7 +784,7 @@ export function EngagementsWorkspace({
               aria-label="Filter by client"
               value={companyFilter}
               onChange={(e) => setCompanyFilter(e.target.value)}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-[#084154]"
+              className="h-9 max-w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-[#084154]"
             >
               <option value="All">All Client Companies</option>
               {companies.map((c) => (
@@ -732,25 +794,58 @@ export function EngagementsWorkspace({
               ))}
             </select>
 
-            <CurrencySelect value={currency} onChange={setCurrency} />
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-slate-400">
+                KPI View:
+              </span>
+              <CurrencySelect
+                value={reportingCurrency}
+                onChange={setReportingCurrency}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200/70 pt-3">
-          {["All", ...ENGAGEMENT_STATUSES].map((st) => (
-            <button
-              key={st}
-              type="button"
-              onClick={() => setStatusFilter(st)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
-                statusFilter === st
-                  ? "bg-[#4b8f9a] text-white shadow-xs"
-                  : "bg-white text-slate-600 border border-slate-200 hover:border-[#4b8f9a]"
-              }`}
-            >
-              {st}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200/70 pt-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {["All", ...ENGAGEMENT_STATUSES].map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setStatusFilter(st)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
+                  statusFilter === st
+                    ? "bg-[#4b8f9a] text-white shadow-xs"
+                    : "bg-white text-slate-600 border border-slate-200 hover:border-[#4b8f9a]"
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1">
+            {[
+              { label: "All Currencies", value: "All" },
+              { label: "INR", value: "INR" },
+              { label: "AED", value: "AED" },
+              { label: "USD", value: "USD" },
+              { label: "All GCC", value: "GCC" },
+            ].map((pill) => (
+              <button
+                key={pill.value}
+                type="button"
+                onClick={() => setCurrencyFilter(pill.value)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                  currencyFilter === pill.value
+                    ? "bg-[#084154] text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -784,16 +879,17 @@ export function EngagementsWorkspace({
         <div className="space-y-4">
           {filteredEngagements.map((eng) => {
             const linkedProject = projectByEngagementId.get(eng.id);
+            const recordCurr = normalizeCurrency(eng.currency);
 
             return (
               <div
                 key={eng.id}
-                className="glass-card rounded-2xl p-5 transition-shadow hover:shadow-md"
+                className="glass-card rounded-2xl p-4 sm:p-5 transition-shadow hover:shadow-md"
               >
                 <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <h2 className="text-lg font-bold text-[#084154]">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="break-words text-base sm:text-lg font-bold text-[#084154]">
                         {eng.title}
                       </h2>
 
@@ -815,18 +911,20 @@ export function EngagementsWorkspace({
                       </select>
 
                       <span className="rounded-lg bg-[#084154]/8 px-2.5 py-0.5 text-xs font-extrabold text-[#084154]">
-                        {formatCurrencyAmount(eng.total_value, currency)}
+                        {formatCurrencyAmount(eng.total_value, recordCurr)}
                       </span>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
+                    <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs text-slate-500">
                       {eng.companies && (
                         <Link
                           href={`/companies/${eng.companies.id}`}
                           className="inline-flex items-center gap-1.5 font-semibold text-[#4b8f9a] hover:text-[#084154]"
                         >
-                          <Building2 className="h-3.5 w-3.5" />
-                          {eng.companies.name} ({eng.companies.client_category})
+                          <Building2 className="h-3.5 w-3.5 shrink-0" />
+                          <span>
+                            {eng.companies.name} ({eng.companies.client_category})
+                          </span>
                         </Link>
                       )}
 
@@ -870,7 +968,7 @@ export function EngagementsWorkspace({
                     </div>
 
                     {eng.requirements_summary && (
-                      <p className="max-w-3xl text-xs leading-relaxed text-slate-600">
+                      <p className="max-w-3xl break-words text-xs leading-relaxed text-slate-600">
                         {eng.requirements_summary}
                       </p>
                     )}
@@ -933,7 +1031,7 @@ export function EngagementsWorkspace({
                   </div>
                 </div>
 
-                {/* Attached Services Breakdown */}
+                {/* Attached Services Breakdown (Always Displayed in Locked Record Currency) */}
                 {eng.engagement_services.length > 0 && (
                   <div className="mt-4 border-t border-slate-200/70 pt-3.5">
                     <p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
@@ -944,7 +1042,7 @@ export function EngagementsWorkspace({
                       {eng.engagement_services.map((line) => (
                         <div
                           key={line.id}
-                          className="rounded-xl border border-slate-200/80 bg-white/80 p-3"
+                          className="min-w-0 rounded-xl border border-slate-200/80 bg-white/80 p-3"
                         >
                           <div className="flex items-start justify-between gap-2">
                             <p className="text-xs font-bold text-[#084154]">
@@ -955,7 +1053,7 @@ export function EngagementsWorkspace({
                             </span>
                           </div>
                           <p className="mt-1 text-xs font-extrabold text-[#4b8f9a]">
-                            {formatCurrencyAmount(line.agreed_price, currency)}
+                            {formatCurrencyAmount(line.agreed_price, recordCurr)}
                             {line.billing_type === "Monthly Retainer"
                               ? " / mo"
                               : ""}
@@ -976,9 +1074,9 @@ export function EngagementsWorkspace({
         </div>
       )}
 
-      {/* Create / Edit Engagement & Scope Builder Modal */}
+      {/* Create / Edit Engagement & Scope Builder Modal (Mobile Safari Safe) */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-        <DialogContent className="max-h-[92vh] sm:max-w-3xl overflow-y-auto bg-white">
+        <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[86dvh] sm:max-w-3xl overflow-y-auto bg-white p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="text-[#084154]">
               {editingEngagement
@@ -986,20 +1084,29 @@ export function EngagementsWorkspace({
                 : "New Client Engagement & Scope Builder"}
             </DialogTitle>
             <DialogDescription>
-              Select a client organization, build a modular scope from your service catalog, and set commercial terms.
+              Select a client organization, build a modular scope from your service catalog, and lock the deal currency.
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSaveEngagement} className="space-y-5 pt-2">
-            <div className="grid gap-4 sm:grid-cols-2">
+          <form onSubmit={handleSaveEngagement} className="space-y-4 sm:space-y-5 pt-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="eng-company">Client Company *</Label>
                 <select
                   id="eng-company"
                   required
                   value={companyId}
-                  onChange={(e) => setCompanyId(e.target.value)}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    setCompanyId(nextId);
+                    const matched = companies.find((c) => c.id === nextId);
+                    if (matched && !editingEngagement) {
+                      setDealCurrency(
+                        normalizeCurrency(matched.default_currency ?? "INR")
+                      );
+                    }
+                  }}
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {companies.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -1017,7 +1124,7 @@ export function EngagementsWorkspace({
                   onChange={(e) =>
                     setStatus(e.target.value as EngagementStatus)
                   }
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {ENGAGEMENT_STATUSES.map((st) => (
                     <option key={st} value={st}>
@@ -1028,18 +1135,38 @@ export function EngagementsWorkspace({
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="eng-title">Engagement / Proposal Title *</Label>
-              <Input
-                id="eng-title"
-                required
-                placeholder="e.g., Q4 Growth Retainer & UAE Entity Structuring"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="eng-title">Engagement / Proposal Title *</Label>
+                <Input
+                  id="eng-title"
+                  required
+                  placeholder="e.g., Q4 Growth Retainer & UAE Entity Structuring"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="eng-currency">Deal Currency *</Label>
+                <select
+                  id="eng-currency"
+                  value={dealCurrency}
+                  onChange={(e) =>
+                    setDealCurrency(e.target.value as CurrencyCode)
+                  }
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-[#084154]"
+                >
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.flag} {c.code} ({c.name})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="eng-start">Start Date</Label>
                 <Input
@@ -1073,22 +1200,20 @@ export function EngagementsWorkspace({
             </div>
 
             {/* Modular Scope Builder Box */}
-            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 sm:p-4">
               <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
                 <div>
                   <p className="text-xs font-bold uppercase tracking-wider text-[#084154]">
                     Modular Scope & Service Line Items
                   </p>
                   <p className="text-[11px] text-slate-500">
-                    Attach services from your catalog and customize deliverables or negotiated pricing.
+                    Attach services from your catalog and enter agreed rates in{" "}
+                    <span className="font-bold text-[#084154]">{dealCurrency}</span>.
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <CurrencySelect value={currency} onChange={setCurrency} />
-                  <div className="rounded-xl bg-[#084154] px-3 py-1.5 text-xs font-bold text-white">
-                    Total: {formatCurrencyAmount(effectiveTotalValue, currency)}
-                  </div>
+                <div className="self-start sm:self-auto rounded-xl bg-[#084154] px-3 py-1.5 text-xs font-bold text-white">
+                  Total: {formatCurrencyAmount(effectiveTotalValue, dealCurrency)}
                 </div>
               </div>
 
@@ -1098,12 +1223,11 @@ export function EngagementsWorkspace({
                     aria-label="Choose catalog service"
                     value={selectedServiceToAdd}
                     onChange={(e) => setSelectedServiceToAdd(e.target.value)}
-                    className="h-9 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-800"
+                    className="h-10 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-800"
                   >
                     {catalogServices.map((srv) => (
                       <option key={srv.id} value={srv.id}>
-                        {srv.name} ({srv.pricing_model} ·{" "}
-                        {formatCurrencyAmount(srv.default_price, currency)})
+                        {srv.name} ({srv.pricing_model})
                       </option>
                     ))}
                   </select>
@@ -1111,7 +1235,7 @@ export function EngagementsWorkspace({
                   <Button
                     type="button"
                     onClick={handleAddServiceLine}
-                    className="h-9 rounded-lg bg-[#4b8f9a] px-3.5 text-xs font-semibold text-white hover:bg-[#084154]"
+                    className="h-10 rounded-lg bg-[#4b8f9a] px-3.5 text-xs font-semibold text-white hover:bg-[#084154]"
                   >
                     <Plus className="mr-1 h-3.5 w-3.5" />
                     Add to Scope
@@ -1126,7 +1250,7 @@ export function EngagementsWorkspace({
               {lineItems.length === 0 ? (
                 <div className="space-y-2 pt-1">
                   <Label htmlFor="eng-manual-total">
-                    Deal Value ({currency}) *
+                    Deal Value ({dealCurrency}) *
                   </Label>
                   <Input
                     id="eng-manual-total"
@@ -1175,7 +1299,7 @@ export function EngagementsWorkspace({
                                   billing_type: e.target.value as BillingType,
                                 })
                               }
-                              className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800"
+                              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800"
                             >
                               {BILLING_TYPES.map((bt) => (
                                 <option key={bt} value={bt}>
@@ -1187,7 +1311,7 @@ export function EngagementsWorkspace({
 
                           <div className="space-y-1">
                             <Label className="text-xs">
-                              Agreed Price ({currency})
+                              Agreed Price ({dealCurrency})
                             </Label>
                             <Input
                               type="number"
@@ -1225,7 +1349,7 @@ export function EngagementsWorkspace({
             </div>
 
             {/* Optional Proposal & Contract Links */}
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="eng-prop-url">Proposal Document URL</Label>
                 <Input
@@ -1249,18 +1373,19 @@ export function EngagementsWorkspace({
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setModalOpen(false)}
+                className="w-full sm:w-auto"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSaving}
-                className="brand-gradient font-semibold text-white"
+                className="brand-gradient w-full sm:w-auto font-semibold text-white"
               >
                 {isSaving
                   ? "Saving..."

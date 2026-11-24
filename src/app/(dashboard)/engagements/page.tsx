@@ -4,6 +4,7 @@ import {
   type CatalogServiceOption,
   type CompanyOption,
 } from "@/components/engagements/engagements-workspace";
+import { DEFAULT_FX_RATES_TO_INR, type CurrencyCode } from "@/lib/currency-core";
 import type {
   EngagementWithDetails,
   ProjectSummaryRecord,
@@ -27,17 +28,18 @@ export default async function EngagementsPage({
     { data: companies },
     { data: services },
     { data: projects },
+    { data: orgSettings },
   ] = await Promise.all([
     supabase.auth.getUser(),
     supabase
       .from("engagements")
       .select(
-        "*, companies(id, name, client_category), engagement_services(*, services(id, name, pricing_model))"
+        "*, companies(id, name, client_category, default_currency), engagement_services(*, services(id, name, pricing_model))"
       )
       .order("created_at", { ascending: false }),
     supabase
       .from("companies")
-      .select("id, name, client_category, status")
+      .select("id, name, client_category, status, default_currency")
       .order("name", { ascending: true }),
     supabase
       .from("services")
@@ -47,6 +49,11 @@ export default async function EngagementsPage({
       .eq("is_active", true)
       .order("name", { ascending: true }),
     supabase.from("projects").select("id, engagement_id, title, status"),
+    supabase
+      .from("organization_settings")
+      .select("default_reporting_currency, fx_rates_to_inr")
+      .eq("id", 1)
+      .maybeSingle(),
   ]);
 
   return (
@@ -57,6 +64,13 @@ export default async function EngagementsPage({
       initialProjects={(projects as ProjectSummaryRecord[]) ?? []}
       currentUserId={user?.id ?? ""}
       defaultCompanyId={companyId}
+      defaultReportingCurrency={
+        (orgSettings?.default_reporting_currency as CurrencyCode) || "INR"
+      }
+      fxRatesToInr={
+        (orgSettings?.fx_rates_to_inr as Record<CurrencyCode, number>) ??
+        DEFAULT_FX_RATES_TO_INR
+      }
     />
   );
 }

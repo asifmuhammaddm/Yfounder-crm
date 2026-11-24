@@ -13,6 +13,7 @@ import {
   CheckSquare,
   Receipt,
   Layers,
+  Settings,
   LogOut,
   Menu,
 } from "lucide-react";
@@ -38,6 +39,7 @@ const primaryNav = [
 
 const catalogNav = [
   { label: "Service Catalog", href: "/services", icon: Layers },
+  { label: "Billing & FX Settings", href: "/settings", icon: Settings },
 ];
 
 interface CrmSidebarProps {
@@ -160,12 +162,12 @@ export function CrmSidebar({ userEmail }: CrmSidebarProps) {
       <header className="glass-card sticky top-0 z-30 flex items-center justify-between border-b border-slate-200/80 px-4 py-3 lg:hidden">
         <BrandLogo />
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-         <SheetTrigger
-  aria-label="Open menu"
-  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#084154] shadow-xs transition-colors hover:bg-slate-100"
->
-  <Menu className="h-5 w-5" />
-</SheetTrigger>
+          <SheetTrigger
+            aria-label="Open menu"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#084154] shadow-xs transition-colors hover:bg-slate-100"
+          >
+            <Menu className="h-5 w-5" />
+          </SheetTrigger>
           <SheetContent className="w-72 bg-[#f8f9fa] p-0" side="left">
             <SheetTitle className="sr-only">Navigation Menu</SheetTitle>
             {navContent}

@@ -20,6 +20,11 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { downloadCsvFile } from "@/lib/csv";
+import {
+  CURRENCY_OPTIONS,
+  normalizeCurrency,
+  type CurrencyCode,
+} from "@/lib/currency";
 import type {
   ClientCategory,
   CompanyStatus,
@@ -84,6 +89,7 @@ export function CompaniesWorkspace({
   const [clientCategory, setClientCategory] =
     useState<ClientCategory>("Startup");
   const [status, setStatus] = useState<CompanyStatus>("Active Client");
+  const [defaultCurrency, setDefaultCurrency] = useState<CurrencyCode>("INR");
   const [industry, setIndustry] = useState("");
   const [website, setWebsite] = useState("");
   const [city, setCity] = useState("");
@@ -131,6 +137,7 @@ export function CompaniesWorkspace({
         company.industry,
         company.city,
         company.country,
+        company.default_currency,
         contactHaystack,
       ]
         .filter(Boolean)
@@ -155,6 +162,7 @@ export function CompaniesWorkspace({
         "Company Name",
         "Client Segment",
         "Status",
+        "Default Currency",
         "Industry",
         "Primary Contact",
         "Primary Email",
@@ -176,6 +184,7 @@ export function CompaniesWorkspace({
           company.name,
           company.client_category,
           company.status,
+          normalizeCurrency(company.default_currency),
           company.industry,
           primary?.full_name,
           primary?.email,
@@ -196,6 +205,7 @@ export function CompaniesWorkspace({
     setName("");
     setClientCategory("Startup");
     setStatus("Active Client");
+    setDefaultCurrency("INR");
     setIndustry("");
     setWebsite("");
     setCity("");
@@ -238,6 +248,7 @@ export function CompaniesWorkspace({
           normalized_name: normalized,
           client_category: clientCategory,
           status,
+          default_currency: defaultCurrency,
           industry: industry.trim() || null,
           website: website.trim() || null,
           city: city.trim() || null,
@@ -277,7 +288,9 @@ export function CompaniesWorkspace({
       };
 
       setCompanies((prev) => [fullCompany, ...prev]);
-      toast.success(`Client "${createdCompany.name}" created`);
+      toast.success(
+        `Client "${createdCompany.name}" created (${defaultCurrency})`
+      );
       resetCreateForm();
       setCreateOpen(false);
       router.refresh();
@@ -356,12 +369,12 @@ export function CompaniesWorkspace({
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight text-[#084154]">
             Clients & Companies
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Manage client organizations, stakeholder directories, and 360-degree consulting accounts.
+            Manage client organizations, default billing currencies, and stakeholder directories.
           </p>
         </div>
 
@@ -388,7 +401,7 @@ export function CompaniesWorkspace({
       </div>
 
       {/* KPI Summary Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="glass-card rounded-2xl p-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
             Total Organizations
@@ -511,17 +524,23 @@ export function CompaniesWorkspace({
               company.contacts?.find((c) => c.is_primary) ??
               company.contacts?.[0] ??
               null;
+            const compCurr = normalizeCurrency(company.default_currency);
 
             return (
               <div
                 key={company.id}
-                className="glass-card flex flex-col justify-between rounded-2xl p-5 transition-all hover:shadow-md"
+                className="glass-card flex min-w-0 flex-col justify-between rounded-2xl p-4 sm:p-5 transition-all hover:shadow-md"
               >
-                <div>
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="rounded-md bg-[#084154]/10 px-2.5 py-0.5 text-xs font-semibold text-[#084154]">
-                      {company.client_category}
-                    </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-md bg-[#084154]/10 px-2.5 py-0.5 text-xs font-semibold text-[#084154]">
+                        {company.client_category}
+                      </span>
+                      <span className="rounded-md bg-[#4b8f9a]/15 px-2 py-0.5 text-[11px] font-bold text-[#084154]">
+                        {compCurr}
+                      </span>
+                    </div>
                     <span
                       className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${getCompanyStatusBadgeClass(
                         company.status
@@ -533,7 +552,7 @@ export function CompaniesWorkspace({
 
                   <Link
                     href={`/companies/${company.id}`}
-                    className="mt-3 block text-lg font-bold text-[#084154] hover:text-[#4b8f9a]"
+                    className="mt-3 block break-words text-lg font-bold text-[#084154] hover:text-[#4b8f9a]"
                   >
                     {company.name}
                   </Link>
@@ -546,16 +565,16 @@ export function CompaniesWorkspace({
                     )}
                     {(company.city || company.country) && (
                       <span className="inline-flex items-center gap-1">
-                        <MapPin className="h-3.5 w-3.5 text-slate-400" />
+                        <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                         {[company.city, company.country]
                           .filter(Boolean)
                           .join(", ")}
                       </span>
                     )}
                     {company.website && (
-                      <span className="inline-flex items-center gap-1 text-slate-500">
-                        <Globe className="h-3.5 w-3.5 text-slate-400" />
-                        {company.website}
+                      <span className="inline-flex min-w-0 items-center gap-1 text-slate-500">
+                        <Globe className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                        <span className="truncate">{company.website}</span>
                       </span>
                     )}
                   </div>
@@ -570,15 +589,17 @@ export function CompaniesWorkspace({
                       </p>
                       <div className="mt-1.5 space-y-1 text-slate-600">
                         {primaryContact.email && (
-                          <p className="flex items-center gap-1.5">
-                            <Mail className="h-3 w-3 text-slate-400" />
-                            {primaryContact.email}
+                          <p className="flex min-w-0 items-center gap-1.5">
+                            <Mail className="h-3 w-3 shrink-0 text-slate-400" />
+                            <span className="truncate">
+                              {primaryContact.email}
+                            </span>
                           </p>
                         )}
                         {primaryContact.phone && (
                           <p className="flex items-center gap-1.5">
-                            <Phone className="h-3 w-3 text-slate-400" />
-                            {primaryContact.phone}
+                            <Phone className="h-3 w-3 shrink-0 text-slate-400" />
+                            <span>{primaryContact.phone}</span>
                           </p>
                         )}
                       </div>
@@ -622,20 +643,20 @@ export function CompaniesWorkspace({
         </div>
       )}
 
-      {/* Create Client Company Modal */}
+      {/* Create Client Company Modal (Mobile Safari Safe) */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-h-[92vh] sm:max-w-2xl overflow-y-auto bg-white">
+        <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[86dvh] sm:max-w-2xl overflow-y-auto bg-white p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="text-[#084154]">
               Add Client Company
             </DialogTitle>
             <DialogDescription>
-              Create an organization profile and attach its primary point of contact.
+              Create an organization profile, set its default billing currency, and attach its primary contact.
             </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={handleCreateCompany} className="space-y-4 pt-2">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="comp-name">Company Name *</Label>
                 <Input
@@ -655,7 +676,7 @@ export function CompaniesWorkspace({
                   onChange={(e) =>
                     setClientCategory(e.target.value as ClientCategory)
                   }
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {CLIENT_CATEGORIES.map((cat) => (
                     <option key={cat} value={cat}>
@@ -666,14 +687,14 @@ export function CompaniesWorkspace({
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="comp-status">Account Status</Label>
                 <select
                   id="comp-status"
                   value={status}
                   onChange={(e) => setStatus(e.target.value as CompanyStatus)}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {COMPANY_STATUSES.map((st) => (
                     <option key={st} value={st}>
@@ -684,22 +705,40 @@ export function CompaniesWorkspace({
               </div>
 
               <div className="space-y-1.5">
+                <Label htmlFor="comp-currency">Default Billing Currency *</Label>
+                <select
+                  id="comp-currency"
+                  value={defaultCurrency}
+                  onChange={(e) =>
+                    setDefaultCurrency(e.target.value as CurrencyCode)
+                  }
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-[#084154]"
+                >
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.flag} {c.code} — {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
                 <Label htmlFor="comp-industry">Industry</Label>
                 <Input
                   id="comp-industry"
-                  placeholder="e.g., FinTech, E-Commerce, Healthcare"
+                  placeholder="e.g., FinTech, Real Estate"
                   value={industry}
                   onChange={(e) => setIndustry(e.target.value)}
                 />
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="comp-city">City</Label>
                 <Input
                   id="comp-city"
-                  placeholder="Dubai"
+                  placeholder="Dubai / Kozhikode"
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
                 />
@@ -709,7 +748,7 @@ export function CompaniesWorkspace({
                 <Label htmlFor="comp-country">Country</Label>
                 <Input
                   id="comp-country"
-                  placeholder="UAE"
+                  placeholder="UAE / India"
                   value={country}
                   onChange={(e) => setCountry(e.target.value)}
                 />
@@ -726,7 +765,7 @@ export function CompaniesWorkspace({
               </div>
             </div>
 
-            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 sm:p-4">
               <p className="text-xs font-bold uppercase tracking-wider text-[#084154]">
                 Primary Stakeholder (Optional)
               </p>
@@ -799,18 +838,19 @@ export function CompaniesWorkspace({
               />
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setCreateOpen(false)}
+                className="w-full sm:w-auto"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSaving}
-                className="brand-gradient font-semibold text-white"
+                className="brand-gradient w-full sm:w-auto font-semibold text-white"
               >
                 <Building2 className="mr-1.5 h-4 w-4 text-[#ffbf00]" />
                 {isSaving ? "Saving..." : "Create Client"}

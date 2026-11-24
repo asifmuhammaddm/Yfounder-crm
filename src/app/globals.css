@@ -120,13 +120,18 @@
   * {
     @apply border-border outline-ring/50;
   }
-  body {
-    @apply bg-background text-foreground;
-  }
   html {
     @apply font-sans;
+    -webkit-text-size-adjust: 100%;
+    overflow-x: clip;
+  }
+  body {
+    @apply bg-background text-foreground;
+    overflow-x: clip;
+    min-height: 100dvh;
   }
 }
+
 /* === YFOUNDER BRAND KIT THEME === */
 :root {
   --font-sans: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
@@ -139,6 +144,7 @@
 body {
   font-family: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
   background-color: #f8f9fa;
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .brand-gradient {
@@ -154,15 +160,56 @@ body {
 }
 
 .glass-card {
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.92);
   box-shadow: 0 4px 24px -4px rgba(8, 65, 84, 0.07);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .accent-gold-pill {
   background-color: rgba(255, 191, 0, 0.16);
   color: #7a5800;
   border: 1px solid rgba(255, 191, 0, 0.45);
+}
+
+/* === IPHONE & MOBILE SAFARI VIEWPORT GUARDRAILS === */
+@media (max-width: 767px) {
+  /* Prevent iOS Safari auto-zoom when tapping form controls inside popups */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Constrain modal popups within dynamic viewport height (dvh) above iOS toolbar/keyboard */
+  [role="dialog"],
+  .modal-sheet {
+    width: calc(100vw - 1.5rem) !important;
+    max-width: calc(100vw - 1.5rem) !important;
+    max-height: 86dvh !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+/* === A4 INVOICE PRINT / PDF STYLES === */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+  body {
+    background: #ffffff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .no-print {
+    display: none !important;
+  }
 }

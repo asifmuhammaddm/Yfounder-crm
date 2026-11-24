@@ -19,12 +19,19 @@ import {
   Clock,
   AlertCircle,
   Download,
+  Printer,
+  Send,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { downloadCsvFile } from "@/lib/csv";
 import {
+  CURRENCY_OPTIONS,
+  DEFAULT_FX_RATES_TO_INR,
+  convertCurrencyAmount,
   formatCurrencyAmount,
+  normalizeCurrency,
   useWorkspaceCurrency,
+  type CurrencyCode,
 } from "@/lib/currency";
 import { CurrencySelect } from "@/components/ui/currency-select";
 import type {
@@ -66,12 +73,14 @@ export interface InvoiceCompanyOption {
   id: string;
   name: string;
   client_category: string;
+  default_currency?: CurrencyCode;
 }
 
 export interface InvoiceEngagementOption {
   id: string;
   company_id: string;
   title: string;
+  currency?: CurrencyCode;
   total_value: number;
   status: string;
 }
@@ -126,6 +135,10 @@ interface InvoicesWorkspaceProps {
   defaultCompanyId?: string;
   defaultEngagementId?: string;
   autoOpenCreate?: boolean;
+  defaultReportingCurrency?: CurrencyCode;
+  fxRatesToInr?: Record<CurrencyCode, number>;
+  inrPaymentDetails?: string;
+  internationalPaymentDetails?: string;
 }
 
 export function InvoicesWorkspace({
@@ -135,6 +148,10 @@ export function InvoicesWorkspace({
   defaultCompanyId,
   defaultEngagementId,
   autoOpenCreate = false,
+  defaultReportingCurrency = "INR",
+  fxRatesToInr = DEFAULT_FX_RATES_TO_INR,
+  inrPaymentDetails = "",
+  internationalPaymentDetails = "",
 }: InvoicesWorkspaceProps) {
   const router = useRouter();
   const didAutoOpenRef = useRef(false);
@@ -145,13 +162,16 @@ export function InvoicesWorkspace({
   const [engagementOptions, setEngagementOptions] =
     useState<InvoiceEngagementOption[]>(engagements);
 
-  // Filters & Shared Currency
+  // Filters & Executive Reporting Currency (Defaults to INR)
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("All");
   const [companyFilter, setCompanyFilter] = useState<string>(
     defaultCompanyId || "All"
   );
-  const [currency, setCurrency] = useWorkspaceCurrency("AED");
+  const [currencyFilter, setCurrencyFilter] = useState<string>("All");
+  const [reportingCurrency, setReportingCurrency] = useWorkspaceCurrency(
+    defaultReportingCurrency
+  );
 
   // Create / Edit Invoice Modal State
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
@@ -164,6 +184,7 @@ export function InvoicesWorkspace({
   const [invEngagementId, setInvEngagementId] = useState<string>(
     defaultEngagementId || ""
   );
+  const [invCurrency, setInvCurrency] = useState<CurrencyCode>("INR");
   const [invIssueDate, setInvIssueDate] = useState(getTodayIso());
   const [invDueDate, setInvDueDate] = useState(getDueDatePlusDays(14));
   const [invTotalAmount, setInvTotalAmount] = useState("");
@@ -171,6 +192,7 @@ export function InvoicesWorkspace({
   const [invNotes, setInvNotes] = useState("");
   const [isSavingInvoice, setIsSavingInvoice] = useState(false);
   const [isPreparingModal, setIsPreparingModal] = useState(false);
+  const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
 
   // Payment Ledger Modal State
   const [ledgerInvoiceId, setLedgerInvoiceId] = useState<string | null>(null);
@@ -179,6 +201,16 @@ export function InvoicesWorkspace({
   const [payMethod, setPayMethod] = useState<string>(PAYMENT_METHODS[0]);
   const [payReference, setPayReference] = useState("");
   const [isSavingPayment, setIsSavingPayment] = useState(false);
+
+  const getDefaultPaymentNotes = useCallback(
+    (curr: CurrencyCode) => {
+      if (curr === "INR") {
+        return inrPaymentDetails.trim();
+      }
+      return internationalPaymentDetails.trim();
+    },
+    [inrPaymentDetails, internationalPaymentDetails]
+  );
 
   // Sync latest invoices, companies, and engagements on mount
   useEffect(() => {
@@ -194,16 +226,16 @@ export function InvoicesWorkspace({
         supabase
           .from("invoices")
           .select(
-            "*, companies(id, name, client_category), engagements(id, title), payments(*)"
+            "*, companies(id, name, client_category, default_currency, city, country), engagements(id, title, currency), payments(*)"
           )
           .order("created_at", { ascending: false }),
         supabase
           .from("companies")
-          .select("id, name, client_category")
+          .select("id, name, client_category, default_currency")
           .order("name", { ascending: true }),
         supabase
           .from("engagements")
-          .select("id, company_id, title, total_value, status")
+          .select("id, company_id, title, currency, total_value, status")
           .order("created_at", { ascending: false }),
       ]);
 
@@ -232,11 +264,11 @@ export function InvoicesWorkspace({
         await Promise.all([
           supabase
             .from("companies")
-            .select("id, name, client_category")
+            .select("id, name, client_category, default_currency")
             .order("name", { ascending: true }),
           supabase
             .from("engagements")
-            .select("id, company_id, title, total_value, status")
+            .select("id, company_id, title, currency, total_value, status")
             .order("created_at", { ascending: false }),
         ]);
 
@@ -273,10 +305,16 @@ export function InvoicesWorkspace({
         explicitEng ??
         findLatestEngagementForCompany(initialComp, resolvedEngagements);
 
+      const matchedComp = resolvedCompanies.find((c) => c.id === initialComp);
+      const resolvedCurr = normalizeCurrency(
+        autoEngagement?.currency ?? matchedComp?.default_currency ?? "INR"
+      );
+
       setEditingInvoice(null);
       setInvNumber(generateNextInvoiceNumber(invoices));
       setInvCompanyId(initialComp);
       setInvEngagementId(autoEngagement?.id ?? "");
+      setInvCurrency(resolvedCurr);
       setInvIssueDate(getTodayIso());
       setInvDueDate(getDueDatePlusDays(14));
       setInvTotalAmount(
@@ -285,7 +323,7 @@ export function InvoicesWorkspace({
           : ""
       );
       setInvStatus("Sent");
-      setInvNotes("");
+      setInvNotes(getDefaultPaymentNotes(resolvedCurr));
       setInvoiceModalOpen(true);
     },
     [
@@ -293,6 +331,7 @@ export function InvoicesWorkspace({
       companyOptions,
       defaultEngagementId,
       engagementOptions,
+      getDefaultPaymentNotes,
       invoices,
     ]
   );
@@ -314,46 +353,86 @@ export function InvoicesWorkspace({
     [invoices, ledgerInvoiceId]
   );
 
+  // Executive KPI Cards: Mathematically convert each invoice from its locked currency into reportingCurrency
   const metrics = useMemo(() => {
     const validInvoices = invoices.filter((inv) => inv.status !== "Void");
+
     const totalBilled = validInvoices.reduce(
-      (sum, inv) => sum + Number(inv.total_amount || 0),
+      (sum, inv) =>
+        sum +
+        convertCurrencyAmount(
+          inv.total_amount,
+          inv.currency,
+          reportingCurrency,
+          fxRatesToInr
+        ),
       0
     );
+
     const totalCollected = validInvoices.reduce(
-      (sum, inv) => sum + Number(inv.amount_paid || 0),
+      (sum, inv) =>
+        sum +
+        convertCurrencyAmount(
+          inv.amount_paid,
+          inv.currency,
+          reportingCurrency,
+          fxRatesToInr
+        ),
       0
     );
+
     const outstanding = validInvoices
       .filter((inv) => inv.status !== "Paid" && inv.status !== "Draft")
-      .reduce(
-        (sum, inv) =>
+      .reduce((sum, inv) => {
+        const balanceNative = Math.max(
+          0,
+          Number(inv.total_amount || 0) - Number(inv.amount_paid || 0)
+        );
+        return (
           sum +
-          Math.max(
-            0,
-            Number(inv.total_amount || 0) - Number(inv.amount_paid || 0)
-          ),
-        0
-      );
+          convertCurrencyAmount(
+            balanceNative,
+            inv.currency,
+            reportingCurrency,
+            fxRatesToInr
+          )
+        );
+      }, 0);
+
     const overdueAmount = validInvoices
       .filter((inv) => inv.status === "Overdue")
-      .reduce(
-        (sum, inv) =>
+      .reduce((sum, inv) => {
+        const balanceNative = Math.max(
+          0,
+          Number(inv.total_amount || 0) - Number(inv.amount_paid || 0)
+        );
+        return (
           sum +
-          Math.max(
-            0,
-            Number(inv.total_amount || 0) - Number(inv.amount_paid || 0)
-          ),
-        0
-      );
+          convertCurrencyAmount(
+            balanceNative,
+            inv.currency,
+            reportingCurrency,
+            fxRatesToInr
+          )
+        );
+      }, 0);
 
     return { totalBilled, totalCollected, outstanding, overdueAmount };
-  }, [invoices]);
+  }, [invoices, reportingCurrency, fxRatesToInr]);
 
   const filteredInvoices = useMemo(() => {
     return invoices.filter((inv) => {
       if (statusFilter !== "All" && inv.status !== statusFilter) return false;
       if (companyFilter !== "All" && inv.company_id !== companyFilter) {
+        return false;
+      }
+
+      const recordCurr = normalizeCurrency(inv.currency);
+      if (currencyFilter === "GCC") {
+        if (!["AED", "SAR", "QAR", "KWD", "BHD", "OMR"].includes(recordCurr)) {
+          return false;
+        }
+      } else if (currencyFilter !== "All" && recordCurr !== currencyFilter) {
         return false;
       }
 
@@ -365,6 +444,7 @@ export function InvoicesWorkspace({
         inv.companies?.name,
         inv.engagements?.title,
         inv.notes,
+        recordCurr,
       ]
         .filter(Boolean)
         .join(" ")
@@ -372,7 +452,7 @@ export function InvoicesWorkspace({
 
       return haystack.includes(q);
     });
-  }, [invoices, statusFilter, companyFilter, searchQuery]);
+  }, [invoices, statusFilter, companyFilter, currencyFilter, searchQuery]);
 
   function handleExportInvoicesCsv() {
     if (filteredInvoices.length === 0) {
@@ -387,29 +467,38 @@ export function InvoicesWorkspace({
         "Client Company",
         "Linked Engagement",
         "Status",
-        "Display Currency",
+        "Billed Currency",
         "Total Billed",
         "Amount Paid",
         "Balance Due",
+        `Converted Total (${reportingCurrency})`,
         "Issue Date",
         "Due Date",
         "Recorded Payments",
         "Notes",
       ],
       filteredInvoices.map((inv) => {
+        const recordCurr = normalizeCurrency(inv.currency);
         const total = Number(inv.total_amount || 0);
         const paid = Number(inv.amount_paid || 0);
         const balance = Math.max(0, total - paid);
+        const convertedTotal = convertCurrencyAmount(
+          total,
+          recordCurr,
+          reportingCurrency,
+          fxRatesToInr
+        );
 
         return [
           inv.invoice_number,
           inv.companies?.name,
           inv.engagements?.title ?? "Standalone",
           inv.status,
-          currency,
+          recordCurr,
           total,
           paid,
           balance,
+          Number(convertedTotal.toFixed(2)),
           inv.issue_date,
           inv.due_date,
           inv.payments?.length ?? 0,
@@ -429,6 +518,7 @@ export function InvoicesWorkspace({
     setInvNumber(inv.invoice_number);
     setInvCompanyId(inv.company_id);
     setInvEngagementId(inv.engagement_id ?? "");
+    setInvCurrency(normalizeCurrency(inv.currency));
     setInvIssueDate(inv.issue_date);
     setInvDueDate(inv.due_date);
     setInvTotalAmount(String(inv.total_amount));
@@ -501,6 +591,7 @@ export function InvoicesWorkspace({
             invoice_number: invNumber.trim(),
             company_id: invCompanyId,
             engagement_id: invEngagementId || null,
+            currency: invCurrency,
             issue_date: invIssueDate,
             due_date: invDueDate,
             total_amount: totalNum,
@@ -509,7 +600,7 @@ export function InvoicesWorkspace({
           })
           .eq("id", editingInvoice.id)
           .select(
-            "*, companies(id, name, client_category), engagements(id, title), payments(*)"
+            "*, companies(id, name, client_category, default_currency, city, country), engagements(id, title, currency), payments(*)"
           )
           .single();
 
@@ -532,6 +623,7 @@ export function InvoicesWorkspace({
             invoice_number: invNumber.trim(),
             company_id: invCompanyId,
             engagement_id: invEngagementId || null,
+            currency: invCurrency,
             issue_date: invIssueDate,
             due_date: invDueDate,
             total_amount: totalNum,
@@ -540,7 +632,7 @@ export function InvoicesWorkspace({
             notes: invNotes.trim() || null,
           })
           .select(
-            "*, companies(id, name, client_category), engagements(id, title), payments(*)"
+            "*, companies(id, name, client_category, default_currency, city, country), engagements(id, title, currency), payments(*)"
           )
           .single();
 
@@ -567,7 +659,7 @@ export function InvoicesWorkspace({
         }
 
         setInvoices((prev) => [data as InvoiceWithDetails, ...prev]);
-        toast.success(`Invoice ${invNumber.trim()} created`);
+        toast.success(`Invoice ${invNumber.trim()} created (${invCurrency})`);
       }
 
       setInvoiceModalOpen(false);
@@ -605,6 +697,43 @@ export function InvoicesWorkspace({
     );
     toast.success(`Invoice marked ${nextStatus}`);
     router.refresh();
+  }
+
+  async function handleSendInvoiceEmail(inv: InvoiceWithDetails) {
+    setSendingEmailId(inv.id);
+    try {
+      const response = await fetch(`/api/invoices/${inv.id}/send`, {
+        method: "POST",
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        sentTo?: string;
+      };
+      if (!response.ok) {
+        throw new Error(
+          result.error || "Could not send invoice email. Check Resend config."
+        );
+      }
+
+      if (inv.status === "Draft") {
+        setInvoices((prev) =>
+          prev.map((item) =>
+            item.id === inv.id ? { ...item, status: "Sent" } : item
+          )
+        );
+      }
+
+      toast.success(
+        `Invoice ${inv.invoice_number} emailed to ${result.sentTo || "client"}`
+      );
+      router.refresh();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to dispatch invoice email."
+      );
+    } finally {
+      setSendingEmailId(null);
+    }
   }
 
   async function handleDeleteInvoice(inv: InvoiceWithDetails) {
@@ -782,12 +911,12 @@ export function InvoicesWorkspace({
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight text-[#084154]">
             Invoices, Payments & Receivables
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Issue client invoices, log partial or full payments, and track consulting cash flow across currencies.
+            Issue currency-locked client invoices, download branded A4 PDFs, and track consolidated cash flow.
           </p>
         </div>
 
@@ -814,58 +943,58 @@ export function InvoicesWorkspace({
         </div>
       </div>
 
-      {/* Financial KPI Summary Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Financial KPI Summary Cards (Mathematically Converted to Reporting Currency) */}
+      <div className="grid gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="glass-card rounded-2xl p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Total Billed
+              Total Billed ({reportingCurrency})
             </p>
-            <Receipt className="h-4 w-4 text-[#084154]" />
+            <Receipt className="h-4 w-4 shrink-0 text-[#084154]" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-[#084154]">
-            {formatCurrencyAmount(metrics.totalBilled, currency)}
+          <p className="mt-2 truncate text-2xl font-bold text-[#084154]">
+            {formatCurrencyAmount(metrics.totalBilled, reportingCurrency)}
           </p>
         </div>
 
         <div className="glass-card rounded-2xl p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Cash Collected
+              Cash Collected ({reportingCurrency})
             </p>
-            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-emerald-600">
-            {formatCurrencyAmount(metrics.totalCollected, currency)}
+          <p className="mt-2 truncate text-2xl font-bold text-emerald-600">
+            {formatCurrencyAmount(metrics.totalCollected, reportingCurrency)}
           </p>
         </div>
 
         <div className="glass-card rounded-2xl p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Outstanding Balance
+              Outstanding ({reportingCurrency})
             </p>
-            <Clock className="h-4 w-4 text-amber-600" />
+            <Clock className="h-4 w-4 shrink-0 text-amber-600" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-amber-600">
-            {formatCurrencyAmount(metrics.outstanding, currency)}
+          <p className="mt-2 truncate text-2xl font-bold text-amber-600">
+            {formatCurrencyAmount(metrics.outstanding, reportingCurrency)}
           </p>
         </div>
 
         <div className="glass-card rounded-2xl p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Overdue Receivables
+              Overdue ({reportingCurrency})
             </p>
-            <AlertCircle className="h-4 w-4 text-rose-600" />
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
           </div>
-          <p className="mt-2 text-2xl font-bold text-rose-600">
-            {formatCurrencyAmount(metrics.overdueAmount, currency)}
+          <p className="mt-2 truncate text-2xl font-bold text-rose-600">
+            {formatCurrencyAmount(metrics.overdueAmount, reportingCurrency)}
           </p>
         </div>
       </div>
 
-      {/* Filters & Currency Bar */}
+      {/* Filters & Executive Reporting Currency Bar */}
       <div className="glass-card space-y-4 rounded-2xl p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="relative flex-1 max-w-md">
@@ -883,7 +1012,7 @@ export function InvoicesWorkspace({
               aria-label="Filter by client"
               value={companyFilter}
               onChange={(e) => setCompanyFilter(e.target.value)}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-[#084154]"
+              className="h-9 max-w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-[#084154]"
             >
               <option value="All">All Client Companies</option>
               {companyOptions.map((c) => (
@@ -893,25 +1022,58 @@ export function InvoicesWorkspace({
               ))}
             </select>
 
-            <CurrencySelect value={currency} onChange={setCurrency} />
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-slate-400">
+                KPI View:
+              </span>
+              <CurrencySelect
+                value={reportingCurrency}
+                onChange={setReportingCurrency}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200/70 pt-3">
-          {["All", ...INVOICE_STATUSES].map((st) => (
-            <button
-              key={st}
-              type="button"
-              onClick={() => setStatusFilter(st)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
-                statusFilter === st
-                  ? "bg-[#4b8f9a] text-white shadow-xs"
-                  : "bg-white text-slate-600 border border-slate-200 hover:border-[#4b8f9a]"
-              }`}
-            >
-              {st}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200/70 pt-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {["All", ...INVOICE_STATUSES].map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setStatusFilter(st)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
+                  statusFilter === st
+                    ? "bg-[#4b8f9a] text-white shadow-xs"
+                    : "bg-white text-slate-600 border border-slate-200 hover:border-[#4b8f9a]"
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1">
+            {[
+              { label: "All Currencies", value: "All" },
+              { label: "INR", value: "INR" },
+              { label: "AED", value: "AED" },
+              { label: "USD", value: "USD" },
+              { label: "All GCC", value: "GCC" },
+            ].map((pill) => (
+              <button
+                key={pill.value}
+                type="button"
+                onClick={() => setCurrencyFilter(pill.value)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                  currencyFilter === pill.value
+                    ? "bg-[#084154] text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -956,6 +1118,7 @@ export function InvoicesWorkspace({
               </thead>
               <tbody className="divide-y divide-slate-200/60">
                 {filteredInvoices.map((inv) => {
+                  const recordCurr = normalizeCurrency(inv.currency);
                   const total = Number(inv.total_amount || 0);
                   const paid = Number(inv.amount_paid || 0);
                   const balance = Math.max(0, total - paid);
@@ -966,27 +1129,32 @@ export function InvoicesWorkspace({
                       className="transition-colors hover:bg-white/80"
                     >
                       <td className="px-4 py-4">
-                        <p className="font-bold text-[#084154]">
-                          {inv.invoice_number}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-bold text-[#084154]">
+                            {inv.invoice_number}
+                          </p>
+                          <span className="rounded bg-[#084154]/8 px-1.5 py-0.5 text-[10px] font-bold text-[#084154]">
+                            {recordCurr}
+                          </span>
+                        </div>
                         {inv.companies && (
                           <Link
                             href={`/companies/${inv.companies.id}`}
                             className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-semibold text-[#4b8f9a] hover:text-[#084154]"
                           >
-                            <Building2 className="h-3.5 w-3.5" />
-                            {inv.companies.name}
+                            <Building2 className="h-3.5 w-3.5 shrink-0" />
+                            <span>{inv.companies.name}</span>
                           </Link>
                         )}
                         {inv.engagements && (
                           <p className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-500">
-                            <Briefcase className="h-3 w-3 text-slate-400" />
-                            {inv.engagements.title}
+                            <Briefcase className="h-3 w-3 shrink-0 text-slate-400" />
+                            <span>{inv.engagements.title}</span>
                           </p>
                         )}
                       </td>
 
-                      <td className="px-4 py-4 text-xs text-slate-600">
+                      <td className="px-4 py-4 text-xs text-slate-600 whitespace-nowrap">
                         <p className="flex items-center gap-1.5">
                           <Calendar className="h-3.5 w-3.5 text-slate-400" />
                           Issued: {inv.issue_date}
@@ -1016,31 +1184,58 @@ export function InvoicesWorkspace({
                         </select>
                       </td>
 
-                      <td className="px-4 py-4 text-xs">
+                      <td className="px-4 py-4 text-xs whitespace-nowrap">
                         <p className="font-extrabold text-[#084154]">
-                          Total: {formatCurrencyAmount(total, currency)}
+                          Total: {formatCurrencyAmount(total, recordCurr)}
                         </p>
                         <p className="mt-0.5 text-emerald-700">
-                          Paid: {formatCurrencyAmount(paid, currency)}
+                          Paid: {formatCurrencyAmount(paid, recordCurr)}
                         </p>
                         <p
                           className={`mt-0.5 font-semibold ${
                             balance > 0 ? "text-amber-700" : "text-slate-400"
                           }`}
                         >
-                          Due: {formatCurrencyAmount(balance, currency)}
+                          Due: {formatCurrencyAmount(balance, recordCurr)}
                         </p>
                       </td>
 
                       <td className="px-4 py-4">
                         <div className="flex items-center justify-end gap-1.5">
+                          <Link
+                            href={`/invoices/${inv.id}/print`}
+                            target="_blank"
+                            title="Open Branded A4 Invoice PDF"
+                            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-[#084154] hover:border-[#084154]"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-[#4b8f9a]" />
+                            <span className="hidden sm:inline">PDF</span>
+                          </Link>
+
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={sendingEmailId === inv.id}
+                            onClick={() => void handleSendInvoiceEmail(inv)}
+                            title="Email Invoice to Client"
+                            className="h-8 rounded-lg px-2.5 text-xs font-semibold text-[#084154]"
+                          >
+                            <Send className="h-3.5 w-3.5 text-[#4b8f9a] sm:mr-1" />
+                            <span className="hidden sm:inline">
+                              {sendingEmailId === inv.id
+                                ? "Sending..."
+                                : "Email"}
+                            </span>
+                          </Button>
+
                           <Button
                             type="button"
                             size="sm"
                             onClick={() => openPaymentLedger(inv)}
-                            className="h-8 rounded-lg bg-[#ffbf00] px-3 text-xs font-semibold text-[#084154] hover:bg-[#ffbf00]/90"
+                            className="h-8 rounded-lg bg-[#ffbf00] px-2.5 sm:px-3 text-xs font-semibold text-[#084154] hover:bg-[#ffbf00]/90"
                           >
-                            <CreditCard className="mr-1.5 h-3.5 w-3.5" />
+                            <CreditCard className="mr-1 h-3.5 w-3.5" />
                             Payments ({inv.payments?.length ?? 0})
                           </Button>
 
@@ -1075,9 +1270,9 @@ export function InvoicesWorkspace({
         </div>
       )}
 
-      {/* Create / Edit Invoice Modal */}
+      {/* Create / Edit Invoice Modal (Mobile Safari Safe) */}
       <Dialog open={invoiceModalOpen} onOpenChange={setInvoiceModalOpen}>
-        <DialogContent className="sm:max-w-2xl bg-white">
+        <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[86dvh] sm:max-w-2xl overflow-y-auto bg-white p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="text-[#084154]">
               {editingInvoice
@@ -1085,12 +1280,12 @@ export function InvoicesWorkspace({
                 : "Create Client Invoice"}
             </DialogTitle>
             <DialogDescription>
-              Issue an invoice against a client company or active consulting engagement.
+              Issue a currency-locked invoice against a client company or active consulting engagement.
             </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={handleSaveInvoice} className="space-y-4 pt-2">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="inv-num">Invoice Number *</Label>
                 <Input
@@ -1103,12 +1298,34 @@ export function InvoicesWorkspace({
               </div>
 
               <div className="space-y-1.5">
+                <Label htmlFor="inv-currency">Billed Currency *</Label>
+                <select
+                  id="inv-currency"
+                  value={invCurrency}
+                  onChange={(e) => {
+                    const nextCurr = e.target.value as CurrencyCode;
+                    setInvCurrency(nextCurr);
+                    if (!editingInvoice) {
+                      setInvNotes(getDefaultPaymentNotes(nextCurr));
+                    }
+                  }}
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-[#084154]"
+                >
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.flag} {c.code}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
                 <Label htmlFor="inv-status">Invoice Status *</Label>
                 <select
                   id="inv-status"
                   value={invStatus}
                   onChange={(e) => setInvStatus(e.target.value as InvoiceStatus)}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {INVOICE_STATUSES.map((st) => (
                     <option key={st} value={st}>
@@ -1119,7 +1336,7 @@ export function InvoicesWorkspace({
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="inv-comp">Client Company *</Label>
                 <select
@@ -1134,7 +1351,17 @@ export function InvoicesWorkspace({
                       engagementOptions
                     );
                     setInvEngagementId(latestEng?.id ?? "");
+                    const matchedComp = companyOptions.find(
+                      (c) => c.id === nextCompId
+                    );
+                    const nextCurr = normalizeCurrency(
+                      latestEng?.currency ??
+                        matchedComp?.default_currency ??
+                        "INR"
+                    );
                     if (!editingInvoice) {
+                      setInvCurrency(nextCurr);
+                      setInvNotes(getDefaultPaymentNotes(nextCurr));
                       setInvTotalAmount(
                         latestEng && Number(latestEng.total_value) > 0
                           ? String(latestEng.total_value)
@@ -1142,7 +1369,7 @@ export function InvoicesWorkspace({
                       );
                     }
                   }}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   {companyOptions.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -1166,31 +1393,36 @@ export function InvoicesWorkspace({
                     const match = engagementOptions.find(
                       (item) => item.id === nextId
                     );
-                    if (
-                      match &&
-                      Number(match.total_value) > 0 &&
-                      !editingInvoice
-                    ) {
-                      setInvTotalAmount(String(match.total_value));
+                    if (match && !editingInvoice) {
+                      const nextCurr = normalizeCurrency(match.currency);
+                      setInvCurrency(nextCurr);
+                      setInvNotes(getDefaultPaymentNotes(nextCurr));
+                      if (Number(match.total_value) > 0) {
+                        setInvTotalAmount(String(match.total_value));
+                      }
                     }
                   }}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800"
                 >
                   <option value="">General / Standalone Invoice</option>
                   {engagementsForSelectedCompany.map((eng) => (
                     <option key={eng.id} value={eng.id}>
                       {eng.title} (
-                      {formatCurrencyAmount(eng.total_value, currency)})
+                      {formatCurrencyAmount(
+                        eng.total_value,
+                        normalizeCurrency(eng.currency)
+                      )}
+                      )
                     </option>
                   ))}
                 </select>
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="inv-amount">
-                  Total Amount ({currency}) *
+                  Total Amount ({invCurrency}) *
                 </Label>
                 <Input
                   id="inv-amount"
@@ -1232,24 +1464,25 @@ export function InvoicesWorkspace({
               <Textarea
                 id="inv-notes"
                 rows={3}
-                placeholder="Bank IBAN details, milestone description, or tax note..."
+                placeholder="Bank IBAN / UPI details, milestone description, or tax note..."
                 value={invNotes}
                 onChange={(e) => setInvNotes(e.target.value)}
               />
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setInvoiceModalOpen(false)}
+                className="w-full sm:w-auto"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSavingInvoice}
-                className="brand-gradient font-semibold text-white"
+                className="brand-gradient w-full sm:w-auto font-semibold text-white"
               >
                 {isSavingInvoice
                   ? "Saving..."
@@ -1262,180 +1495,184 @@ export function InvoicesWorkspace({
         </DialogContent>
       </Dialog>
 
-      {/* Payment Ledger & Record Payment Modal */}
+      {/* Payment Ledger & Record Payment Modal (Locked to Invoice Currency & Mobile Safe) */}
       <Dialog
         open={Boolean(ledgerInvoice)}
         onOpenChange={(open) => !open && setLedgerInvoiceId(null)}
       >
-        <DialogContent className="max-h-[92vh] sm:max-w-2xl overflow-y-auto bg-white">
+        <DialogContent className="w-[calc(100vw-1.5rem)] max-h-[86dvh] sm:max-w-2xl overflow-y-auto bg-white p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="text-[#084154]">
               Payment Ledger · {ledgerInvoice?.invoice_number}
             </DialogTitle>
             <DialogDescription>
-              {ledgerInvoice?.companies?.name} · Record received installments or wire transfers and auto-reconcile balance.
+              {ledgerInvoice?.companies?.name} · Record received installments or wire transfers in{" "}
+              {normalizeCurrency(ledgerInvoice?.currency)}.
             </DialogDescription>
           </DialogHeader>
 
-          {ledgerInvoice && (
-            <div className="space-y-5 pt-2">
-              <div className="grid grid-cols-3 gap-3 rounded-2xl bg-[#084154]/[0.04] p-4 text-center">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase text-slate-400">
-                    Invoice Total
-                  </p>
-                  <p className="mt-1 text-base font-extrabold text-[#084154]">
-                    {formatCurrencyAmount(ledgerInvoice.total_amount, currency)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-semibold uppercase text-slate-400">
-                    Collected
-                  </p>
-                  <p className="mt-1 text-base font-extrabold text-emerald-600">
-                    {formatCurrencyAmount(ledgerInvoice.amount_paid, currency)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-semibold uppercase text-slate-400">
-                    Balance Due
-                  </p>
-                  <p className="mt-1 text-base font-extrabold text-amber-600">
-                    {formatCurrencyAmount(
-                      Math.max(
-                        0,
-                        Number(ledgerInvoice.total_amount || 0) -
-                          Number(ledgerInvoice.amount_paid || 0)
-                      ),
-                      currency
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              <form
-                onSubmit={handleRecordPayment}
-                className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4"
-              >
-                <p className="text-xs font-bold uppercase tracking-wider text-[#084154]">
-                  Record New Payment
-                </p>
-
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="pay-amt" className="text-xs">
-                      Amount ({currency}) *
-                    </Label>
-                    <Input
-                      id="pay-amt"
-                      type="number"
-                      min="0.01"
-                      step="any"
-                      required
-                      placeholder="2500"
-                      value={payAmount}
-                      onChange={(e) => setPayAmount(e.target.value)}
-                      className="bg-white"
-                    />
+          {ledgerInvoice && (() => {
+            const invCurr = normalizeCurrency(ledgerInvoice.currency);
+            return (
+              <div className="space-y-5 pt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-2xl bg-[#084154]/[0.04] p-3.5 sm:p-4 text-center">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase text-slate-400">
+                      Invoice Total
+                    </p>
+                    <p className="mt-1 text-base font-extrabold text-[#084154]">
+                      {formatCurrencyAmount(ledgerInvoice.total_amount, invCurr)}
+                    </p>
                   </div>
-
-                  <div className="space-y-1">
-                    <Label htmlFor="pay-date" className="text-xs">
-                      Payment Date *
-                    </Label>
-                    <Input
-                      id="pay-date"
-                      type="date"
-                      required
-                      value={payDate}
-                      onChange={(e) => setPayDate(e.target.value)}
-                      className="bg-white"
-                    />
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase text-slate-400">
+                      Collected
+                    </p>
+                    <p className="mt-1 text-base font-extrabold text-emerald-600">
+                      {formatCurrencyAmount(ledgerInvoice.amount_paid, invCurr)}
+                    </p>
                   </div>
-
-                  <div className="space-y-1">
-                    <Label htmlFor="pay-method" className="text-xs">
-                      Method
-                    </Label>
-                    <select
-                      id="pay-method"
-                      value={payMethod}
-                      onChange={(e) => setPayMethod(e.target.value)}
-                      className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800"
-                    >
-                      {PAYMENT_METHODS.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase text-slate-400">
+                      Balance Due
+                    </p>
+                    <p className="mt-1 text-base font-extrabold text-amber-600">
+                      {formatCurrencyAmount(
+                        Math.max(
+                          0,
+                          Number(ledgerInvoice.total_amount || 0) -
+                            Number(ledgerInvoice.amount_paid || 0)
+                        ),
+                        invCurr
+                      )}
+                    </p>
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    placeholder="Transaction reference / UTR / SWIFT note (optional)"
-                    value={payReference}
-                    onChange={(e) => setPayReference(e.target.value)}
-                    className="bg-white text-xs"
-                  />
-                  <Button
-                    type="submit"
-                    disabled={isSavingPayment}
-                    className="brand-gradient h-9 shrink-0 px-4 text-xs font-semibold text-white"
-                  >
-                    {isSavingPayment ? "Recording..." : "+ Record Payment"}
-                  </Button>
-                </div>
-              </form>
-
-              <div className="space-y-2">
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  Recorded Payments ({ledgerInvoice.payments?.length ?? 0})
-                </p>
-
-                {!ledgerInvoice.payments ||
-                ledgerInvoice.payments.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-slate-200 py-6 text-center text-xs text-slate-400">
-                    No payments recorded for this invoice yet.
+                <form
+                  onSubmit={handleRecordPayment}
+                  className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5 sm:p-4"
+                >
+                  <p className="text-xs font-bold uppercase tracking-wider text-[#084154]">
+                    Record New Payment ({invCurr})
                   </p>
-                ) : (
-                  <div className="space-y-2">
-                    {ledgerInvoice.payments.map((pay) => (
-                      <div
-                        key={pay.id}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs"
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="pay-amt" className="text-xs">
+                        Amount ({invCurr}) *
+                      </Label>
+                      <Input
+                        id="pay-amt"
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        required
+                        placeholder="2500"
+                        value={payAmount}
+                        onChange={(e) => setPayAmount(e.target.value)}
+                        className="bg-white"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="pay-date" className="text-xs">
+                        Payment Date *
+                      </Label>
+                      <Input
+                        id="pay-date"
+                        type="date"
+                        required
+                        value={payDate}
+                        onChange={(e) => setPayDate(e.target.value)}
+                        className="bg-white"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="pay-method" className="text-xs">
+                        Method
+                      </Label>
+                      <select
+                        id="pay-method"
+                        value={payMethod}
+                        onChange={(e) => setPayMethod(e.target.value)}
+                        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800"
                       >
-                        <div>
-                          <p className="font-bold text-emerald-700">
-                            {formatCurrencyAmount(pay.amount, currency)}
-                            <span className="ml-2 font-medium text-slate-500">
-                              via {pay.method || "Payment"}
-                            </span>
-                          </p>
-                          <p className="mt-0.5 text-[11px] text-slate-500">
-                            Date: {pay.payment_date}
-                            {pay.reference_note
-                              ? ` · Ref: ${pay.reference_note}`
-                              : ""}
-                          </p>
-                        </div>
-
-                        <button
-                          type="button"
-                          aria-label="Delete payment"
-                          onClick={() => handleDeletePayment(pay.id)}
-                          className="text-slate-400 hover:text-rose-600"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ))}
+                        {PAYMENT_METHODS.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                )}
+
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      placeholder="Transaction reference / UTR / SWIFT note (optional)"
+                      value={payReference}
+                      onChange={(e) => setPayReference(e.target.value)}
+                      className="bg-white text-xs"
+                    />
+                    <Button
+                      type="submit"
+                      disabled={isSavingPayment}
+                      className="brand-gradient h-10 shrink-0 px-4 text-xs font-semibold text-white"
+                    >
+                      {isSavingPayment ? "Recording..." : "+ Record Payment"}
+                    </Button>
+                  </div>
+                </form>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Recorded Payments ({ledgerInvoice.payments?.length ?? 0})
+                  </p>
+
+                  {!ledgerInvoice.payments ||
+                  ledgerInvoice.payments.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-slate-200 py-6 text-center text-xs text-slate-400">
+                      No payments recorded for this invoice yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {ledgerInvoice.payments.map((pay) => (
+                        <div
+                          key={pay.id}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs"
+                        >
+                          <div>
+                            <p className="font-bold text-emerald-700">
+                              {formatCurrencyAmount(pay.amount, invCurr)}
+                              <span className="ml-2 font-medium text-slate-500">
+                                via {pay.method || "Payment"}
+                              </span>
+                            </p>
+                            <p className="mt-0.5 text-[11px] text-slate-500">
+                              Date: {pay.payment_date}
+                              {pay.reference_note
+                                ? ` · Ref: ${pay.reference_note}`
+                                : ""}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            aria-label="Delete payment"
+                            onClick={() => handleDeletePayment(pay.id)}
+                            className="text-slate-400 hover:text-rose-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

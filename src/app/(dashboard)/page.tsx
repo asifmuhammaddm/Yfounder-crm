@@ -7,6 +7,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { DEFAULT_FX_RATES_TO_INR, type CurrencyCode } from "@/lib/currency-core";
 import { DashboardTasksWidget } from "@/components/dashboard/dashboard-tasks-widget";
 import { DashboardFinancialOverview } from "@/components/dashboard/dashboard-financial-overview";
 import type { InvoiceRecord, TaskWithDetails } from "@/types/crm";
@@ -21,6 +22,7 @@ export default async function DashboardHomePage() {
     { count: activeProjectsCount },
     { data: openTasks },
     { data: invoices },
+    { data: orgSettings },
   ] = await Promise.all([
     supabase
       .from("leads")
@@ -48,6 +50,11 @@ export default async function DashboardHomePage() {
       .from("invoices")
       .select("*")
       .order("created_at", { ascending: false }),
+    supabase
+      .from("organization_settings")
+      .select("default_reporting_currency, fx_rates_to_inr")
+      .eq("id", 1)
+      .maybeSingle(),
   ]);
 
   const summaryCards = [
@@ -82,10 +89,10 @@ export default async function DashboardHomePage() {
   ];
 
   return (
-    <div className="space-y-8">
-      <div className="brand-gradient relative overflow-hidden rounded-2xl p-6 text-white shadow-md sm:p-8">
+    <div className="space-y-6 sm:space-y-8">
+      <div className="brand-gradient relative overflow-hidden rounded-2xl p-5 text-white shadow-md sm:p-8">
         <div className="relative z-10 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-          <div>
+          <div className="min-w-0">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-[#ffbf00]">
               <Sparkles className="h-3.5 w-3.5" />
               Workspace Authenticated
@@ -101,21 +108,21 @@ export default async function DashboardHomePage() {
 
           <Link
             href="/invoices"
-            className="inline-flex items-center justify-center rounded-xl bg-[#ffbf00] px-5 py-2.5 text-sm font-semibold text-[#084154] shadow-sm transition-opacity hover:bg-[#ffbf00]/90"
+            className="inline-flex shrink-0 items-center justify-center rounded-xl bg-[#ffbf00] px-5 py-2.5 text-sm font-semibold text-[#084154] shadow-sm transition-opacity hover:bg-[#ffbf00]/90"
           >
             Invoices & Billing →
           </Link>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {summaryCards.map((card) => {
           const Icon = card.icon;
           return (
             <Link
               key={card.label}
               href={card.href}
-              className="glass-card block rounded-2xl p-5 transition-transform hover:-translate-y-0.5"
+              className="glass-card block rounded-2xl p-4 sm:p-5 transition-transform hover:-translate-y-0.5"
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -136,6 +143,13 @@ export default async function DashboardHomePage() {
 
       <DashboardFinancialOverview
         initialInvoices={(invoices as InvoiceRecord[]) ?? []}
+        defaultReportingCurrency={
+          (orgSettings?.default_reporting_currency as CurrencyCode) || "INR"
+        }
+        fxRatesToInr={
+          (orgSettings?.fx_rates_to_inr as Record<CurrencyCode, number>) ??
+          DEFAULT_FX_RATES_TO_INR
+        }
       />
 
       <DashboardTasksWidget
